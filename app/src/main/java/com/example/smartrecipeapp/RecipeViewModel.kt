@@ -3,84 +3,97 @@ package com.example.smartrecipeapp
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.smartrecipeapp.data.AppDatabase
+import com.example.smartrecipeapp.data.RecipeDatabaseHelper
 import com.example.smartrecipeapp.data.RecipeEntity
 import com.example.smartrecipeapp.data.ShoppingItemEntity
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class RecipeViewModel(application: Application) : AndroidViewModel(application), RecipeViewModelContract {
 
-    // Veritabanı ve DAO bağlantılarını başlatıyoruz
-    private val database = AppDatabase.getDatabase(application)
-    private val recipeDao = database.recipeDao()
-    private val shoppingDao = database.shoppingDao()
+    private val dbHelper = RecipeDatabaseHelper(application)
 
-    // Tüm tarifleri ekranın okuyabileceği bir "StateFlow" yapısına dönüştürüyoruz
-    override val recipeList = recipeDao.getAllRecipes().stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
+    private val _recipeList = MutableStateFlow<List<RecipeEntity>>(emptyList())
+    override val recipeList: StateFlow<List<RecipeEntity>> = _recipeList
 
-    // Tüm alışveriş listesini ekran için hazır hale getiriyoruz
-    override val shoppingList = shoppingDao.getAllShoppingItems().stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
+    private val _shoppingList = MutableStateFlow<List<ShoppingItemEntity>>(emptyList())
+    override val shoppingList: StateFlow<List<ShoppingItemEntity>> = _shoppingList
+
+    init {
+        loadData()
+    }
+
+    private fun loadData() {
+        viewModelScope.launch {
+            val recipes = withContext(Dispatchers.IO) { dbHelper.getAllRecipes() }
+            val shoppingItems = withContext(Dispatchers.IO) { dbHelper.getAllShoppingItems() }
+            _recipeList.value = recipes
+            _shoppingList.value = shoppingItems
+        }
+    }
 
     // --- TARİF İŞLEMLERİ ---
     override fun addRecipe(title: String, category: String, ingredients: String, instructions: String) {
         viewModelScope.launch {
-            val newRecipe = RecipeEntity(
-                title = title,
-                category = category,
-                ingredients = ingredients,
-                instructions = instructions
-            )
-            recipeDao.insertRecipe(newRecipe)
+            withContext(Dispatchers.IO) {
+                dbHelper.insertRecipe(title, category, ingredients, instructions)
+            }
+            loadData()
         }
     }
 
     override fun deleteRecipe(recipe: RecipeEntity) {
         viewModelScope.launch {
-            recipeDao.deleteRecipe(recipe)
+            withContext(Dispatchers.IO) {
+                dbHelper.deleteRecipe(recipe.id)
+            }
+            loadData()
         }
     }
 
     // --- ALIŞVERİŞ LİSTESİ İŞLEMLERİ ---
     override fun addShoppingItem(itemName: String) {
         viewModelScope.launch {
-            val newItem = ShoppingItemEntity(itemName = itemName)
-            shoppingDao.insertItem(newItem)
+            withContext(Dispatchers.IO) {
+                dbHelper.insertShoppingItem(itemName)
+            }
+            loadData()
         }
     }
 
     override fun toggleShoppingItem(item: ShoppingItemEntity) {
         viewModelScope.launch {
-            // Elemanın tıklandığında durumunu tersine çeviriyoruz (Yapıldı -> Yapılmadı)
-            shoppingDao.updateItem(item.copy(isCompleted = !item.isCompleted))
+            withContext(Dispatchers.IO) {
+                dbHelper.updateShoppingItemStatus(item.id, !item.isCompleted)
+            }
+            loadData()
         }
     }
 
     override fun deleteShoppingItem(item: ShoppingItemEntity) {
         viewModelScope.launch {
-            shoppingDao.deleteItem(item)
+            withContext(Dispatchers.IO) {
+                dbHelper.deleteShoppingItem(item.id)
+            }
+            loadData()
         }
     }
 
     // --- AKILLI ÖZELLİK: Tarif Malzemelerini Alışveriş Listesine Ekleme ---
     override fun addIngredientsToShoppingList(ingredientsText: String) {
         viewModelScope.launch {
-            // Malzemeler virgülle ayrılmış text olduğu için onları parçalıyoruz
-            val items = ingredientsText.split(",").map { it.trim() }
-            for (item in items) {
-                if (item.isNotEmpty()) {
-                    shoppingDao.insertItem(ShoppingItemEntity(itemName = item))
+            withContext(Dispatchers.IO) {
+                val items = ingredientsText.split(",").map { it.trim() }
+                for (item in items) {
+                    if (item.isNotEmpty()) {
+                        dbHelper.insertShoppingItem(item)
+                    }
                 }
             }
+            loadData()
         }
     }
 }
